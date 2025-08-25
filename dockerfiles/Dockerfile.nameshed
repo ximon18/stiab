@@ -62,7 +62,4 @@ COPY --from=build /tmp/nameshed/target/release/nameshed /nameshed/bin/
 COPY --from=build /tmp/dnst/target/release/dnst /tmp/
 COPY --chmod=755 entrypoints/entrypoint_nameshed.sh /entrypoint.sh
 RUN chown -R nameshed:nameshed /nameshed
-
-
-
 ENTRYPOINT ["/entrypoint.sh"]
