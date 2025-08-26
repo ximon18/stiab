@@ -27,7 +27,7 @@ ENV PATH="/root/.cargo/bin:$PATH"
 RUN echo $PATH
 WORKDIR /tmp
 RUN git clone --single-branch --branch main https://github.com/NLnetLabs/nameshed nameshed
-RUN git clone --single-branch --branch keyset-with-kmip-support https://github.com/NLnetLabs/dnst dnst
+RUN git clone --single-branch --branch keyset https://github.com/NLnetLabs/dnst dnst
 WORKDIR /tmp/nameshed
 RUN git pull \
 &&  cargo build --release
