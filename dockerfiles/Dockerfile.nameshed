@@ -12,7 +12,6 @@ RUN export DEBIAN_FRONTEND=noninteractive; \
     wget \
     coreutils \
     curl \
-    git-core \
     vim \
     dnsutils \
     iproute2 \
@@ -25,15 +24,10 @@ RUN rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && find /var/log -type f -dele
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 ENV PATH="/root/.cargo/bin:$PATH"
 RUN echo $PATH
-WORKDIR /tmp
-RUN git clone --single-branch --branch main https://github.com/NLnetLabs/nameshed nameshed
-RUN git clone --single-branch --branch keyset https://github.com/NLnetLabs/dnst dnst
-WORKDIR /tmp/nameshed
-RUN git pull \
-&&  cargo build --release
-WORKDIR /tmp/dnst
-RUN git pull \
-&&  cargo build --release
+ADD https://github.com/NLnetLabs/nameshed.git#main /tmp/nameshed/
+RUN cargo build --release --manifest-path /tmp/nameshed/Cargo.toml
+ADD https://github.com/NLnetLabs/dnst.git#keyset /tmp/dnst/
+RUN cargo build --release --manifest-path /tmp/dnst/Cargo.toml
 
 FROM ubuntu:latest AS final
 RUN export DEBIAN_FRONTEND=noninteractive; \
