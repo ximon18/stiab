@@ -4,6 +4,13 @@
 # docker build -t nameshed-stiab:latest -f dockerfiles/Dockerfile.nameshed . &&  docker system prune -f && docker buildx prune -f
 FROM ubuntu:latest AS build
 
+# NAMESHED_SRC usage: docker compose build nameshed-signer --build-arg
+# NAMESHED_SRC=nameshed This will build from local sources in a directory
+# named nameshed, but note due to Docker context rules the source directory
+# has to be inside the stiab directory.
+ARG NAMESHED_SRC=https://github.com/NLnetLabs/nameshed.git#main
+ARG DNST_SRC=https://github.com/NLnetLabs/dnst.git#keyset
+
 RUN export DEBIAN_FRONTEND=noninteractive; \
     apt-get update \
 &&  apt-get -y -qq install --no-install-recommends \
@@ -23,10 +30,9 @@ RUN apt-get clean
 RUN rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && find /var/log -type f -delete
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 ENV PATH="/root/.cargo/bin:$PATH"
-RUN echo $PATH
-ADD https://github.com/NLnetLabs/nameshed.git#main /tmp/nameshed/
+ADD ${NAMESHED_SRC} /tmp/nameshed/
 RUN cargo build --release --manifest-path /tmp/nameshed/Cargo.toml
-ADD https://github.com/NLnetLabs/dnst.git#keyset /tmp/dnst/
+ADD ${DNST_SRC} /tmp/dnst/
 RUN cargo build --release --manifest-path /tmp/dnst/Cargo.toml
 
 FROM ubuntu:latest AS final
