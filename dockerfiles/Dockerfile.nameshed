@@ -1,0 +1,65 @@
+# Build file for a very basic Nameshed container
+# Includes nameshed-hsm-relay for now in the same container though could be its own container
+# config and files to run Nameshed must be supplied through volumes
+# docker build -t nameshed-stiab:latest -f dockerfiles/Dockerfile.nameshed . &&  docker system prune -f && docker buildx prune -f
+FROM ubuntu:latest AS build
+
+# NAMESHED_SRC usage: docker compose build nameshed-signer --build-arg
+# NAMESHED_SRC=nameshed This will build from local sources in a directory
+# named nameshed, but note due to Docker context rules the source directory
+# has to be inside the stiab directory.
+ARG NAMESHED_SRC=https://github.com/NLnetLabs/nameshed.git#main
+ARG DNST_SRC=https://github.com/NLnetLabs/dnst.git#keyset
+
+RUN export DEBIAN_FRONTEND=noninteractive; \
+    apt-get update \
+&&  apt-get -y -qq install --no-install-recommends \
+    ca-certificates \
+    lsb-release \
+    wget \
+    coreutils \
+    curl \
+    vim \
+    dnsutils \
+    iproute2 \
+    build-essential \
+    pkg-config \
+    libssl-dev
+RUN apt-get upgrade -y
+RUN apt-get clean
+RUN rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && find /var/log -type f -delete
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+ENV PATH="/root/.cargo/bin:$PATH"
+ADD ${NAMESHED_SRC} /tmp/nameshed/
+RUN cargo build --release --manifest-path /tmp/nameshed/Cargo.toml
+ADD ${DNST_SRC} /tmp/dnst/
+RUN cargo build --release --manifest-path /tmp/dnst/Cargo.toml
+
+FROM ubuntu:latest AS final
+RUN export DEBIAN_FRONTEND=noninteractive; \
+    apt-get update \
+&&  apt-get -y -qq install --no-install-recommends \
+    ca-certificates \
+    lsb-release \
+    wget \
+    coreutils \
+    curl \
+    git-core \
+    vim \
+    dnsutils \
+    iproute2 \
+    softhsm2 \
+    bind9-utils 
+RUN apt-get upgrade -y
+RUN apt-get clean
+RUN rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && find /var/log -type f -delete
+RUN useradd --system --home-dir /nameshed --create-home nameshed
+RUN softhsm2-util --init-token --label Nameshed --pin 1234 --so-pin 1234 --free
+RUN mkdir -p /nameshed/bin
+# RUN mkdir -p /nameshed/etc
+COPY --from=build /tmp/nameshed/target/release/nameshed /nameshed/bin/
+# Nameshed currently requires dnst to be in /tmp.
+COPY --from=build /tmp/dnst/target/release/dnst /tmp/
+COPY --chmod=755 entrypoints/entrypoint_nameshed.sh /entrypoint.sh
+RUN chown -R nameshed:nameshed /nameshed
+ENTRYPOINT ["/entrypoint.sh"]

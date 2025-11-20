@@ -15,7 +15,6 @@ This means that the levels above and below (DNS root and DNS lower levels) have 
 After you have cloned this repo, you should be able to just run `docker compose up -d --build` and get a working dnssec signing setup.
 Provided your host has Git and Docker (see below for guidance).
 (TL;DR see the TL;DR file in this repo)
-If you already know wat you want, you can alter configs beforehand (e.g. choose a faster dnssec policy in files/knot-signer/knot.conf to really get those keys rolling!).
 
 Once up and running you can start altering configs, zonefiles and even swap out or add whole components.
 The preferred way of working is to not make changes in the running containers, but on the files you got by cloning this repository and doing a `docker compose down` and `docker compose up -d --build` again.
@@ -57,8 +56,9 @@ Also for extra validation realism: a DNSSEC signing second level nameserver is s
 |  name          |   function                                                                                                                                                                 |
 |----------------|-------------------------------------------------------------------------------------------------------------------------|
 |knot-zoneloader  |Loads unsigned zone of your TLD, supplies XFRs and notifies to the next in line nameserver: nsd-pre-validator.|
-|nsd-pre-validator   |Does DNS validation and supplies IXFRs to the next in line nameserver: knot-signer. Please note: the validation/verifier mechanism of NSD only applies to incoming XFRs|
-|knot-signer     |DNSSEC signer for TLD, supplies IXFRs to the next in line nameserver: nsd-post-validator|
+|nsd-pre-validator   |Does DNS validation and supplies IXFRs to the next in line nameserver: nameshed-signer. Please note: the validation/verifier mechanism of NSD only applies to incoming XFRs|
+|nameshed-signer     |DNSSEC signer for TLD, supplies IXFRs to the next in line nameserver: nsd-post-validator|
+|nameshed-hsm-relay   | KMIP to PKCS#11 HSM relay backed by SoftHSMv2|
 |nsd-post-validator   |Does DNSSEC validation and supplies IXFRs to the next in line nameserver: nsd-dister. Please note: the validation/verifier mechanism of NSD only applies to incoming XFRs|
 |nsd-dister      |Hidden primary that could theoretically supply IXFRs to your (anycasted) public nameserver setup. However, in this setup it functions as the source of authority for our own TLD. As such it is included as an NS for .tld in the (fake) root.zone|
 |unbound-recursor|Fake dns rooted recursor that enables validation with dig, delv, drill, dnsviz. We need that CD bit!!! root-hints: knot-fakeroot only, trust-anchor is our own .tld ksk's DS|
@@ -81,7 +81,9 @@ Y(("`local zone
 edits`")) --> |edits| A
 A[Knot loader] --> |ixfr| J
 J[NSD pre signing validator] --> |ixfr| B
-B[Knot signer] --> |ixfr| C
+B[Nameshed signer] --> |ixfr| C
+B[Nameshed signer] --> |kmip| BB
+BB[Nameshed HSM relay]
 C[NSD post signing validator] --> |ixfr| D
 D[NSD dister] --> |ixfr| E
 E((public NS))
@@ -102,8 +104,7 @@ M[NitroKey NetHSM] --> |signatures| K
 
 ## Serials
 **NOTE**: files/knot-zoneloader/zones/tld.zone holds the pre-signing serial (in the logging named as "remote serial"). Update this serial if you change the tld.zone file. After updating the zone file: `docker compose exec knot-zoneloader knotc zone-reload tld`  
-**NOTE**: knot-signer will sign, and thus increase the serial, but this is a separate serial from the pre-signing serial. The main reason for knot-signer to keep this separate serial is that RRSIGs expire and need regeneration, wether you changed the unsigned zone or not.  
-**NOTE**: repeated docker compose up/down's will repeatedly increment the post signing serial. This is because we keep the /var/lib/knot/keys/\*.mdb between restarts. Why not remove these files? Because this would also result in creating new keys at every docker compose up (and thus a new DS in the root dns zone, and the recursor). This is too inconvenient at the moment, with the configs being handcrafted. Another consequence of keeping Knotds \*.mdb files between restarts is that DNSSEC key roll times do not reset. They are linked to the key age from key creationwhich is recorded in the \*.mdb files. This means that an unexpected (but harmless) ZSK key roll could start immediately after deploy. This is for example visible as an extra zsk in DNSviz. Do not remove this extra key, Knotd is planning on using it in the near future.   
+**NOTE**: nameshed-signer will sign, but doesn't yet increase the serial.
 **NOTE**: knot-secondlevel-hsmsigned *does* use the cdnskey mechanism to update the unsigned .tld zone. At start, and at ksk-roll. This means it can start and order the NetHSM to generate a fresh KSK and a ZSK without any manual work such as editing the .tld zonefile to copy-paste the DS for sidn-hsmsigned.tld into it.
 
 # Preparations before deployment
@@ -229,9 +230,9 @@ If you are using an incus/lxd VM pull the files to your laptop:
     # unsigned .tld on knot-zoneloader (changes will survive compose down and up, DNSSEC signatures will not)
     vim files/knot-zoneloader/zones/tld.zone
     docker exec stiab-knot-zoneloader-1 knotc zone-reload tld
-    docker exec stiab-knot-signer-1 knotc zone-status tld
-    docker exec stiab-knot-signer-1 keymgr tld list
-    docker exec stiab-knot-signer-1 keymgr tld list -e iso
+    # docker exec stiab-knot-signer-1 knotc zone-status tld
+    # docker exec stiab-knot-signer-1 keymgr tld list
+    # docker exec stiab-knot-signer-1 keymgr tld list -e iso
 
 
 # Create your own config files by hand
@@ -282,20 +283,8 @@ Use the files in the repository for guidance.
     chown --recursive knot:knot /var/lib/knot
     exit
 
-## knot-signer
-    mkdir files/knot-signer
-    mkdir files/knot-signer/zones files/knot-signer/journal
-    vim files/knot-signer/knot.conf
-    # (files/knot-signer/zones/tld.zone is created automatically after notify from nsd-pre-validator)
-    # (if hostname == knot-signer: entrypoint_knotd.sh removes all files/knot-signer/zones files/knot-signer/journal content)
-    # (using the same docker image as knot-secondlevel so no build here)
-    docker run --rm -it --entrypoint bash -v ./files/knot-signer/knot.conf:/etc/knot/knot.conf:ro -v ./files/knot-signer/keys:/var/lib/knot/keys:rw -v ./files/knot-signer/zones:/var/lib/knot/zones:rw -v ./files/knot-signer/journal:/var/lib/knot/journal:rw knotd-stiab:latest
-
-    chown --recursive knot:knot /var/lib/knot
-    keymgr tld generate algorithm=13 ksk=yes zsk=no
-    keymgr tld generate algorithm=13 ksk=no zsk=yes
-    keymgr tld ds | grep '13 2' > /var/lib/knot/keys/ds.tld   # for root zone
-    exit
+## nameshed-signer
+    TODO
 
 ## knot-fakeroot
     mkdir files/knot-fakeroot
@@ -354,7 +343,7 @@ Use the files in the repository for guidance.
     mkdir files/nsd-post-validator
     mkdir files/nsd-post-validator/zones files/nsd-post-validator/keys
     vim files/nsd-post-validator/nsd.conf   # Note: zones and key/cert files under /var/lib/stiab/
-    # (files/nsd-post-validator/zones/tld.zone is created automatically after notify from knot-signer)
+    # (files/nsd-post-validator/zones/tld.zone is created automatically after notify from nameshed-signer)
     # (using the same docker image as nsd-pre-validator so no build here)
     docker run --rm -it --entrypoint bash -v ./files/nsd-post-validator/nsd.conf:/etc/nsd/nsd.conf:ro -v ./files/nsd-post-validator/keys:/var/lib/stiab/keys:rw nsd-stiab:latest
 
